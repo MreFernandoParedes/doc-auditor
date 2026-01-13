@@ -1,5 +1,9 @@
 import os
 import re
+
+import spacy
+from spacy.matcher import Matcher
+
 import database
 
 # Use path relative to this script file to ensure it works regardless of CWD
@@ -14,11 +18,30 @@ DEP_PATTERNS = [
     r"(Decreto\s+Legislativo\s+N[°ºo]?\s*\.?\s*\d+)"
 ]
 
-# Keywords for rules
-OBLIGATION_KEYWORDS = ["debe", "deberá", "tiene que", "es obligatorio", "corresponde a"]
-PROHIBITION_KEYWORDS = ["prohibido", "no podrá", "no se permite", "queda prohibido"]
-
 STOP_WORDS = {"el", "la", "los", "las", "un", "una", "de", "del", "a", "ante", "bajo", "cabe", "con", "contra", "de", "desde", "en", "entre", "hacia", "hasta", "para", "por", "según", "sin", "sobe", "tras", "y", "o", "que", "se", "su", "sus", "es", "son", "no", "lo", "al", "como", "más", "pero", "si", "mi", "me", "te", "ti", "nos"}
+
+NLP = spacy.blank("es")
+if "sentencizer" not in NLP.pipe_names:
+    NLP.add_pipe("sentencizer")
+
+RULE_MATCHER = Matcher(NLP.vocab)
+
+OBLIGATION_PATTERNS = [
+    [{"LOWER": {"IN": ["debe", "deberá", "deberia", "deberían"]}}],
+    [{"LOWER": "tiene"}, {"LOWER": "que"}],
+    [{"LOWER": "es"}, {"LOWER": "obligatorio"}],
+    [{"LOWER": "corresponde"}, {"LOWER": "a"}],
+]
+
+PROHIBITION_PATTERNS = [
+    [{"LOWER": "prohibido"}],
+    [{"LOWER": "no"}, {"LOWER": "podrá"}],
+    [{"LOWER": "no"}, {"LOWER": "se"}, {"LOWER": "permite"}],
+    [{"LOWER": "queda"}, {"LOWER": "prohibido"}],
+]
+
+RULE_MATCHER.add("OBLIGATION", OBLIGATION_PATTERNS)
+RULE_MATCHER.add("PROHIBITION", PROHIBITION_PATTERNS)
 
 def scan_directory():
     """Scans the 'documentos' directory, updates DB, and processes docs."""
@@ -57,26 +80,29 @@ def extract_dependencies_from_text(doc_id, text):
         database.add_dependency(doc_id, ref)
 
 def extract_rules_from_text(doc_id, text):
-    """Splits text into chunks/sentences and looks for rule keywords."""
-    # Simple splitting by newline or period (naive approach)
-    # Ideally use NLTK or Spacy, but sticking to stdlib for MVP
-    lines = text.split('\n')
-    
-    for line in lines:
-        line = line.strip()
-        if not line:
+    """Splits text into sentences and looks for rule patterns using spaCy."""
+    doc = NLP(text)
+
+    for sent in doc.sents:
+        sentence = sent.text.strip()
+        if not sentence:
             continue
-            
-        lower_line = line.lower()
-        
-        rule_type = None
-        if any(w in lower_line for w in PROHIBITION_KEYWORDS):
+
+        matches = RULE_MATCHER(sent)
+        if not matches:
+            continue
+
+        has_prohibition = any(NLP.vocab.strings[match_id] == "PROHIBITION" for match_id, _, _ in matches)
+        has_obligation = any(NLP.vocab.strings[match_id] == "OBLIGATION" for match_id, _, _ in matches)
+
+        if has_prohibition:
             rule_type = "PROHIBITION"
-        elif any(w in lower_line for w in OBLIGATION_KEYWORDS):
+        elif has_obligation:
             rule_type = "OBLIGATION"
-            
-        if rule_type:
-            database.add_rule(doc_id, line, rule_type)
+        else:
+            continue
+
+        database.add_rule(doc_id, sentence, rule_type)
 
 def check_compliance(child_content, parent_rule_text):
     """
