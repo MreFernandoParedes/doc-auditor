@@ -717,4 +717,5 @@ Notas finales:
 - La extracción preserva la estructura y contenido del documento original.
 - Páginas procesadas: 3 a 20 (18 páginas en total desde el punto de inicio)
 
+
 Fecha de extracción: 17 de diciembre de 2025
